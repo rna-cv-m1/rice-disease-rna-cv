@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rice-disease-rna-cv"
+version = "0.1.0"
+description = "Detection des maladies du riz par vision artificielle"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "tensorflow",
+    "torch",
+    "torchvision",
+    "opencv-python-headless",
+    "scikit-learn",
+    "matplotlib",
+    "seaborn",
+    "pandas",
+    "numpy",
+    "pillow",
+]
