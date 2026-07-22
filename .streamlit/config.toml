@@ -1,0 +1,28 @@
+[theme]
+# Configuration du thème
+primaryColor = "#2d5016"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+font = "sans serif"
+
+[client]
+# Configuration client
+showErrorDetails = true
+toolbarMode = "viewer"
+
+[logger]
+# Logs
+level = "info"
+
+[server]
+# Configuration serveur
+port = 8501
+headless = true
+runOnSave = true
+maxUploadSize = 200  # MB
+enableXsrfProtection = true
+
+[browser]
+# Navigateur
+gatherUsageStats = false
