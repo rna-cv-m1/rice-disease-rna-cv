@@ -9,6 +9,24 @@ __pycache__/
 venv/
 env/
 
+# Artefacts de build et de packaging
+build/
+dist/
+*.egg-info/
+
+# Caches et résultats de tests
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Fichiers Streamlit locaux
+.streamlit/cache/
+.streamlit/secrets.toml
+
+# Journaux locaux
+*.log
+
 # Stockage de données volumineuses (images)
 data/
 
