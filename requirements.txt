@@ -1,0 +1,6 @@
+# Liste des librairies Python nécessaires
+
+Pillow
+torch
+torchvision
+scikit-learn

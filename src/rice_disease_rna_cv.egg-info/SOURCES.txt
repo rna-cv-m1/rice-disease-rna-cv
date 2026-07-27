@@ -1,8 +1,0 @@
-README.md
-pyproject.toml
-src/__init__.py
-src/rice_disease_rna_cv.egg-info/PKG-INFO
-src/rice_disease_rna_cv.egg-info/SOURCES.txt
-src/rice_disease_rna_cv.egg-info/dependency_links.txt
-src/rice_disease_rna_cv.egg-info/requires.txt
-src/rice_disease_rna_cv.egg-info/top_level.txt

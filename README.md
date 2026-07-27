@@ -1,36 +1,27 @@
-# Détection des maladies du riz par vision artificielle
+# LE PROJET EST DIVISER EN DEUX ETAPE
 
-Projet d'intelligence artificielle dédié au diagnostic automatisé des maladies du riz à partir d'images foliaires.
+1- ETL
+2- ML
 
----
+<h1>ETL<h1>
 
-## Structure du projet
+1/ Etraction
+2/ Transformation
+3/ Loade
 
-```plaintext
-rice-disease-rna-cv/
-├── pyproject.toml      # Gestion des dépendances Python (géré via uv)
-├── data/               # Corpus d'images (exclu de Git)
-├── notebooks/          # Notebooks Colab d'expérimentation (00 à 04)
-├── src/                # Code source Python modulaire
-├── models/             # Sauvegarde des poids du réseau de neurones
-└── RULES.md            # Directives et règles indispensables pour l'équipe
-```
+<h1>ML<h1>
+1/ creation du modele (Learning Transfer) (model_pretrain.py)
+2/ entrainement du model (train.py) et c'est qui est le meilleur est stocker dans models
+3/ evaluation du model (evalute.py)
+4/ mise en production final pour la prediction (predict.py)
 
----
 
-## Outils et environnement
+# INSTALLATION A AFFAIRE
+-> Visitez le requirements.txt
 
-| Outil | Rôle / Usage |
-| :--- | :--- |
-| **Google Colab** | Environnement d'exécution principal avec GPU (T4). |
-| **uv** | Gestionnaire de dépendances ultra-rapide basé sur `pyproject.toml`. |
-| **Google Drive** | Stockage permanent des poids de modèles et des checkpoints. |
-| **Git & GitHub** | Suivi de version collaboratif sur la branche `develop`. |
+# REMARQUE 
+- Il faut que vous cree une variable d'envirenement dans /RICE-DISEASE-RNA-CV/
+- Cette programme est diviser on micro-service
+- Donc vous pouvez executer touts le test de fichier que vous vouliez consulter . On met tout simplement le vrai chemin du fichier sur le consol powershel avant de faire [python fichier_nam.py]
 
----
-
-<div style="background-color: #f7fafc; border-left: 3px solid #4a5568; padding: 10px 14px; margin: 16px 0; border-radius: 4px;">
-  <span style="color: #2d3748;">Directives et Règles du Projet</span><br>
-  Pour les consignes de sécurité, la gestion du stockage et la routine de développement, consultez le document dédié :<br>
-  <a href="RULES.md">Fichier des Directives & Règles (RULES.md)</a>
-</div>
+- la partie ETL utilise de donner donc vous dever charger le donner brute dans data/
