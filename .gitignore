@@ -5,7 +5,7 @@ env/
 
 
 # Stockage de données volumineuses (images)
-data/donne_propre
+data/donne_brute
 
 # Configuration locale et système
 .DS_Store
