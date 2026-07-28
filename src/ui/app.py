@@ -21,7 +21,7 @@ import torchvision.transforms as transforms
 from PIL import Image
 import pandas as pd
 
-from src.config import CLASSES, IMAGE_SIZE, SEUIL_CONFIANCE_MIN, MEAN_IMAGENET, STD_IMAGENET
+from src.config import CLASSES, CLASSES_FR_EN, IMAGE_SIZE, SEUIL_CONFIANCE_MIN, MEAN_IMAGENET, STD_IMAGENET
 from src.dataset.verifier import verifier_est_feuille_riz
 from src.nn.builder import charger_meilleur_modele
 
@@ -151,28 +151,29 @@ with col2:
 
             # Étape C : Identification de la classe prédite et du score de confiance
             top_prob, top_idx = torch.max(probs, 0)
-            classe = CLASSES[top_idx.item()]
+            classe_raw = CLASSES[top_idx.item()]
+            classe_nom = CLASSES_FR_EN.get(classe_raw, classe_raw)
             confiance = top_prob.item() * 100.0
 
-            # Étape D : Affichage adapté selon le niveau de confiance
+            # Étape D : Affichage centré et agrandi (Nom FR (EN) et symbole d'estimation ≈)
             if confiance < SEUIL_CONFIANCE_MIN:
                 st.markdown(f"""
-                    <div class="result-card" style="border-left-color: #F57C00;">
-                        <div class="result-title" style="color: #F57C00;">Maladie probable : {classe}</div>
-                        <div>Probabilité : <b>{confiance:.2f}%</b> <span style="font-size: 0.9rem; opacity: 0.85;">(Diagnostic à vérifier)</span></div>
+                    <div class="result-card" style="border-left-color: #F57C00; text-align: center; padding: 20px 15px;">
+                        <div class="result-title" style="color: #F57C00; font-size: 1.35rem; margin-bottom: 8px;">Maladie probable : {classe_nom}</div>
+                        <div style="font-size: 1.25rem; font-weight: 700;">≈ {confiance:.2f}%</div>
                     </div>
                 """, unsafe_allow_html=True)
             else:
                 st.markdown(f"""
-                    <div class="result-card">
-                        <div class="result-title">{classe}</div>
-                        <div>Probabilité : <b>{confiance:.2f}%</b></div>
+                    <div class="result-card" style="text-align: center; padding: 20px 15px;">
+                        <div class="result-title" style="font-size: 1.35rem; margin-bottom: 8px;">{classe_nom}</div>
+                        <div style="font-size: 1.25rem; font-weight: 700;">≈ {confiance:.2f}%</div>
                     </div>
                 """, unsafe_allow_html=True)
 
             # Étape E : Graphique de distribution des probabilités
             df_probs = pd.DataFrame({
-                "Maladie": CLASSES,
+                "Maladie": [CLASSES_FR_EN.get(c, c) for c in CLASSES],
                 "Probabilité (%)": [round(p.item() * 100, 2) for p in probs],
             })
             st.write("<b>Distribution des probabilités :</b>", unsafe_allow_html=True)

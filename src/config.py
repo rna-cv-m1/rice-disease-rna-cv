@@ -48,5 +48,15 @@ CLASSES = [
 ]
 NB_CLASSES = len(CLASSES)
 
+# Correspondance des noms de maladies FR (EN) pour l'affichage utilisateur
+CLASSES_FR_EN = {
+    'Bacterial Leaf Blight': 'Bactériose du riz (Bacterial Leaf Blight)',
+    'Brown Spot': 'Taches brunes (Brown Spot)',
+    'Healthy Rice Leaf': 'Feuille saine (Healthy Rice Leaf)',
+    'Leaf Blast': 'Pyriculariose (Leaf Blast)',
+    'Leaf scald': 'Échaudage des feuilles (Leaf Scald)',
+    'Sheath Blight': 'Brûlure de la gaine (Sheath Blight)',
+}
+
 # Extension de fichier de modèle
 EXTENSION_MODEL = ".pth"
