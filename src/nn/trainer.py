@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from typing import Dict, Any, Union
 from pathlib import Path
 
@@ -13,6 +13,12 @@ from src.nn.builder import cree_modele_pretrain, ARCHITECTURES_DISPONIBLES
 
 # Configuration du logger pour le suivi des métriques d'apprentissage
 logger = logging.getLogger(__name__)
+
+try:
+    from tqdm.auto import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
 
 
 def entrainer(
@@ -36,6 +42,7 @@ def entrainer(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Activation de la précision mixte (AMP FP16) sur GPU pour accélérer les calculs par 2
     use_amp = device.type == "cuda"
+    print(f"\n--- Entraînement : {architecture.upper()} ({epochs} époques sur {device}) ---")
     logger.info(f"Début de l'entraînement {architecture.upper()} sur {device} (AMP={use_amp})")
 
     # Définition du chemin de sauvegarde du modèle sous models/<architecture>.pth
@@ -53,7 +60,7 @@ def entrainer(
     # Planificateur de taux d'apprentissage avec décroissance cosinoïdale
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs)
     # Mise à l'échelle des gradients pour l'entraînement FP16
-    scaler = GradScaler(enabled=use_amp)
+    scaler = GradScaler(device.type, enabled=use_amp)
 
     meilleure_perte = float("inf")
     # Dictionnaire d'enregistrement de l'historique
@@ -64,7 +71,7 @@ def entrainer(
         "val_acc": [],
         "perte_val_min": 0.0,
         "precision_finale": 0.0,
-        "model_path": save_path
+        "model_path": str(save_path)
     }
 
     # Boucle d'entraînement époque par époque
@@ -75,14 +82,21 @@ def entrainer(
         modele.train()
         perte_train = total_train = 0
 
-        for images, targets in loader_train:
+        desc = f"Époque {epoch+1:02d}/{epochs:02d}"
+        if HAS_TQDM:
+            pbar = tqdm(loader_train, desc=desc, leave=True)
+            train_iter = pbar
+        else:
+            train_iter = loader_train
+
+        for images, targets in train_iter:
             # Transfert asynchrone non-bloquant des images et cibles vers le GPU
             images, targets = images.to(device, non_blocking=True), targets.to(device, non_blocking=True)
             # Réinitialisation rapide des gradients (set_to_none=True libère la mémoire)
             optimizer.zero_grad(set_to_none=True)
 
             # Context manager pour le calcul sous précision mixte (FP16/FP32)
-            with autocast(enabled=use_amp):
+            with autocast(device_type=device.type, enabled=use_amp):
                 loss = criterion(modele(images), targets)
 
             # Rétropropagation des gradients mis à l'échelle
@@ -92,6 +106,8 @@ def entrainer(
 
             perte_train += loss.item() * images.size(0)
             total_train += targets.size(0)
+            if HAS_TQDM:
+                pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
         # Mise à jour du taux d'apprentissage (Cosine Annealing) à chaque fin d'époque
         scheduler.step()
@@ -106,7 +122,7 @@ def entrainer(
         with torch.no_grad():
             for images, targets in loader_val:
                 images, targets = images.to(device, non_blocking=True), targets.to(device, non_blocking=True)
-                with autocast(enabled=use_amp):
+                with autocast(device_type=device.type, enabled=use_amp):
                     outputs = modele(images)
                 perte_val += criterion(outputs, targets).item() * images.size(0)
                 # Calcul rapide des prédictions exactes via argmax
@@ -123,7 +139,17 @@ def entrainer(
         history["val_loss"].append(val_loss)
         history["val_acc"].append(val_acc)
 
-        logger.info(f"Époque {epoch+1}/{epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
+        if HAS_TQDM:
+            pbar.set_postfix({
+                "loss": f"{train_loss:.4f}",
+                "val_loss": f"{val_loss:.4f}",
+                "val_acc": f"{val_acc:.2f}%"
+            })
+            pbar.refresh()
+        else:
+            print(f"{desc} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
+
+        logger.info(f"{desc} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
 
         # Sauvegarde du meilleur modèle lorsque la perte de validation diminue
         if val_loss < meilleure_perte:
@@ -139,7 +165,7 @@ def entrainer(
                 "state_dict": modele.state_dict()
             }
             torch.save(checkpoint, save_path)
-            logger.info(f"--> Meilleur modèle sauvegardé sous : {save_path}")
+            logger.info(f"Meilleur modèle sauvegardé sous : {save_path}")
 
     return history
 

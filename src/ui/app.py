@@ -1,5 +1,14 @@
 import sys
+import pathlib
 from pathlib import Path
+import torch
+
+# Autoriser la désérialisation de PosixPath / WindowsPath dans PyTorch 2.6+ pour Streamlit
+if hasattr(torch.serialization, "add_safe_globals"):
+    try:
+        torch.serialization.add_safe_globals([pathlib.PosixPath, pathlib.WindowsPath])
+    except Exception:
+        pass
 
 # Inclusion dynamique du dossier racine du projet dans sys.path pour valider les imports relatifs
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -117,7 +126,11 @@ with col2:
     st.subheader("Résultat du diagnostic")
 
     if not uploaded_file:
-        st.info("Veuillez sélectionner une photo dans la colonne de gauche.")
+        st.markdown("""
+            <div class="result-card" style="border-left-color: #2E7D32;">
+                <div style="font-size: 0.95rem; font-weight: 500;">Veuillez sélectionner une photo dans la colonne de gauche.</div>
+            </div>
+        """, unsafe_allow_html=True)
     elif model_pret:
         # Étape A : Filtrage Hors-Domaine (OOD) via analyse de couverture végétale HSV
         est_feuille, ratio = verifier_est_feuille_riz(image)

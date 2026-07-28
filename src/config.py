@@ -16,6 +16,7 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 # Architectures supportées et par défaut
 ARCHITECTURES_DISPONIBLES = ["efficientnet_b0", "resnet18", "mobilenet_v3_small", "convnext_tiny"]
 DEFAULT_ARCHITECTURE = "efficientnet_b0"
+DEFAULT_MODEL_PATH = MODELS_DIR / f"{DEFAULT_ARCHITECTURE}.pth"
 
 # Hyperparamètres et configurations de traitement
 BATCH_SIZE = 32

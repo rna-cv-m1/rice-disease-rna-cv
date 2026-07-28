@@ -1,10 +1,52 @@
+import pathlib
 import torch
 import torch.nn as nn
 from torchvision import models
-from typing import Tuple, Union, Optional
+from typing import Tuple, Union, Optional, Any
 from pathlib import Path
 
 from src.config import NB_CLASSES, ARCHITECTURES_DISPONIBLES, DEFAULT_ARCHITECTURE, MODELS_DIR
+
+# Autoriser la désérialisation de PosixPath / WindowsPath dans PyTorch 2.6+
+if hasattr(torch.serialization, "add_safe_globals"):
+    try:
+        torch.serialization.add_safe_globals([pathlib.PosixPath, pathlib.WindowsPath])
+    except Exception:
+        pass
+
+
+def _load_checkpoint(path: Union[str, Path], map_location: Any = "cpu") -> Any:
+    """Charge un fichier .pth avec gestion de la rétrocompatibilité PyTorch 2.6+."""
+    try:
+        return torch.load(path, map_location=map_location, weights_only=True)
+    except Exception:
+        return torch.load(path, map_location=map_location, weights_only=False)
+
+
+def _detecter_architecture_depuis_weights(weights: Any, default_arch: str = DEFAULT_ARCHITECTURE) -> str:
+    """Détecte dynamiquement l'architecture PyTorch sous-jacente d'après les clés du state_dict."""
+    if not isinstance(weights, dict):
+        return default_arch
+
+    keys = set(weights.keys())
+
+    # ResNet18 (conv1.weight, layer1.0..., fc.weight/fc.0.weight)
+    if any(k.startswith("conv1.") or k.startswith("layer1.") or k.startswith("fc.") for k in keys):
+        return "resnet18"
+
+    # ConvNeXt-Tiny (features.0.0.block ou classifier.2)
+    if any("features.0.0.block" in k or k.startswith("classifier.2.") for k in keys):
+        return "convnext_tiny"
+
+    # MobileNetV3-Small (classifier.3)
+    if any(k.startswith("classifier.3.") for k in keys):
+        return "mobilenet_v3_small"
+
+    # EfficientNet-B0 (classifier.1)
+    if any(k.startswith("classifier.1.") for k in keys):
+        return "efficientnet_b0"
+
+    return default_arch
 
 
 def cree_modele_pretrain(nb_classes: int = NB_CLASSES, architecture: str = DEFAULT_ARCHITECTURE) -> nn.Module:
@@ -64,8 +106,8 @@ def obtenir_chemin_meilleur_modele(models_dir: Union[str, Path] = MODELS_DIR) ->
     meilleur_f, meilleure_acc = pth_files[0], -1.0
     for f in pth_files:
         try:
-            # Chargement sécurisé avec weights_only=True
-            ckpt = torch.load(f, map_location="cpu", weights_only=True)
+            # Chargement sécurisé avec gestion des types PosixPath (PyTorch 2.6+)
+            ckpt = _load_checkpoint(f, map_location="cpu")
             acc = float(ckpt.get("val_acc", -1)) if isinstance(ckpt, dict) else -1.0
             if acc > meilleure_acc:
                 meilleure_acc, meilleur_f = acc, f
@@ -103,23 +145,41 @@ def charger_meilleur_modele(
         modele.to(device).eval()
         return modele, DEFAULT_ARCHITECTURE
 
-    # Chargement sécurisé du checkpoint PyTorch (weights_only=True prévient les vulnérabilités Pickle)
-    ckpt = torch.load(path, map_location=device, weights_only=True)
+    # Chargement sécurisé du checkpoint PyTorch (avec gestion de compatibilité PyTorch 2.6+)
+    ckpt = _load_checkpoint(path, map_location=device)
 
     # Extraction des poids et du nom d'architecture à partir du dictionnaire de sauvegarde
     if isinstance(ckpt, dict) and "state_dict" in ckpt:
-        arch = ckpt.get("arch", path.stem)
+        arch = ckpt.get("arch", None)
         weights = ckpt["state_dict"]
     elif isinstance(ckpt, dict) and "model_state_dict" in ckpt:
-        arch = ckpt.get("arch", path.stem)
+        arch = ckpt.get("arch", None)
         weights = ckpt["model_state_dict"]
     else:
         weights = ckpt
-        arch = path.stem if path.stem in ARCHITECTURES_DISPONIBLES else DEFAULT_ARCHITECTURE
+        arch = None
+
+    # Auto-détection intelligente de l'architecture :
+    # 1. 'arch' explicite dans le dictionnaire
+    # 2. Nom du fichier s'il correspond à une architecture connue
+    # 3. Détection par signature des clés de poids (weight keys fingerprint)
+    if not arch or arch not in ARCHITECTURES_DISPONIBLES:
+        if path.stem in ARCHITECTURES_DISPONIBLES:
+            arch = path.stem
+        else:
+            arch = _detecter_architecture_depuis_weights(weights, default_arch=DEFAULT_ARCHITECTURE)
 
     # Instanciation de l'architecture correspondante et chargement des poids entraînés
-    modele = cree_modele_pretrain(nb_classes=nb_classes, architecture=arch)
-    modele.load_state_dict(weights)
+    try:
+        modele = cree_modele_pretrain(nb_classes=nb_classes, architecture=arch)
+        modele.load_state_dict(weights)
+    except Exception:
+        # En cas d'incompatibilité de clés, forcer l'auto-détection et utiliser strict=False
+        arch_recupere = _detecter_architecture_depuis_weights(weights, default_arch=DEFAULT_ARCHITECTURE)
+        modele = cree_modele_pretrain(nb_classes=nb_classes, architecture=arch_recupere)
+        modele.load_state_dict(weights, strict=False)
+        arch = arch_recupere
+
     # Transfert vers le device (CPU/GPU) et passage strict en mode évaluation (.eval())
     modele.to(device).eval()
 

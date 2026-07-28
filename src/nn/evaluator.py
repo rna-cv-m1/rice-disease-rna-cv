@@ -10,7 +10,7 @@ from src.nn.builder import charger_meilleur_modele
 
 logger = logging.getLogger(__name__)
 
-def evaluer(model_path: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
+def evaluer(model_path: Optional[Union[str, Path]] = DEFAULT_MODEL_PATH) -> Dict[str, Any]:
     """Évalue le modèle sur le jeu de validation et retourne le rapport texte, la matrice et les données brutes.
 
     Args:
