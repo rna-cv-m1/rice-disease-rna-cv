@@ -136,17 +136,15 @@ with col2:
         est_feuille, ratio = verifier_est_feuille_riz(image)
 
         if not est_feuille:
-            st.error("Image rejetée : aucune feuille de riz détectée sur la photo.")
-            st.markdown(f"""
+            st.markdown("""
                 <div class="result-card" style="border-left-color:#C62828;">
-                    <div class="result-title" style="color:#C62828;">Diagnostic : image hors domaine</div>
-                    <div>Couverture végétale détectée : <b>{ratio*100:.1f}%</b> (Seuil minimum : 10%)</div>
+                    <div class="result-title" style="color:#C62828;">Photo non reconnue</div>
+                    <div style="font-size: 0.95rem; margin-top: 4px;">Aucune feuille de riz détectée sur cette photo.</div>
                 </div>
             """, unsafe_allow_html=True)
         else:
             # Étape B : Prétraitement et inférence rapide
             with st.spinner("Analyse en cours..."):
-                # Application de Center Crop -> Resize (224,224) -> ToTensor -> Normalize
                 tensor = _INFERENCE_TF(_center_crop(image)).unsqueeze(0).to(device)
                 with torch.no_grad():
                     probs = torch.softmax(modele(tensor)[0], dim=0)
@@ -156,13 +154,21 @@ with col2:
             classe = CLASSES[top_idx.item()]
             confiance = top_prob.item() * 100.0
 
-            # Étape D : Affichage direct et épuré de la maladie avec la plus haute probabilité
-            st.markdown(f"""
-                <div class="result-card">
-                    <div class="result-title">{classe}</div>
-                    <div>Probabilité : <b>{confiance:.2f}%</b></div>
-                </div>
-            """, unsafe_allow_html=True)
+            # Étape D : Affichage adapté selon le niveau de confiance
+            if confiance < SEUIL_CONFIANCE_MIN:
+                st.markdown(f"""
+                    <div class="result-card" style="border-left-color: #F57C00;">
+                        <div class="result-title" style="color: #F57C00;">Maladie probable : {classe}</div>
+                        <div>Probabilité : <b>{confiance:.2f}%</b> <span style="font-size: 0.9rem; opacity: 0.85;">(Diagnostic à vérifier)</span></div>
+                    </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                    <div class="result-card">
+                        <div class="result-title">{classe}</div>
+                        <div>Probabilité : <b>{confiance:.2f}%</b></div>
+                    </div>
+                """, unsafe_allow_html=True)
 
             # Étape E : Graphique de distribution des probabilités
             df_probs = pd.DataFrame({
