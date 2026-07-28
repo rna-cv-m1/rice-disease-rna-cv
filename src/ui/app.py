@@ -1,8 +1,7 @@
 import sys
 from pathlib import Path
-from typing import Tuple
 
-# Inclusion dynamique du dossier racine du projet dans sys.path pour les imports relatifs
+# Inclusion dynamique du dossier racine du projet dans sys.path pour valider les imports relatifs
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -13,149 +12,147 @@ import torchvision.transforms as transforms
 from PIL import Image
 import pandas as pd
 
-from src.config import DEFAULT_MODEL_PATH, CLASSES, IMAGE_SIZE, SEUIL_CONFIANCE_MIN
+from src.config import CLASSES, IMAGE_SIZE, SEUIL_CONFIANCE_MIN, MEAN_IMAGENET, STD_IMAGENET
 from src.dataset.verifier import verifier_est_feuille_riz
-from src.nn.builder import charger_meilleur_modele, cree_modele_pretrain
+from src.nn.builder import charger_meilleur_modele
 
 # ============================================================
-# 1. CONFIGURATION & STYLES (UI Épurée et Adaptative)
+# 1. CONFIGURATION & STYLES (UI Épurée et Responsive)
 # ============================================================
 
+# Configuration de la page Streamlit en mode large (wide layout)
 st.set_page_config(page_title="Diagnostic Maladie du Riz", layout="wide")
 
+# Injection CSS personnalisée pour affichage propre sans sidebar
 st.markdown("""
     <style>
-    /* Masquer la sidebar latérale pour garder une vue fluide et minimaliste */
+    /* Masquer le menu latéral latéral Streamlit */
     [data-testid="stSidebar"] { display: none; }
-
+    
     /* Titre principal vert sobre */
-    .main-title { color: #2E7D32; font-size: 2rem; font-weight: 700; margin-bottom: 5px; }
-
-    /* Badges de statut adaptatifs (compatibles mode clair et sombre) */
-    .status-ok { background-color: rgba(46, 125, 50, 0.15); color: #2E7D32; padding: 4px 12px; border-radius: 20px; font-weight: 600; }
-    .status-err { background-color: rgba(198, 40, 40, 0.15); color: #C62828; padding: 4px 12px; border-radius: 20px; font-weight: 600; }
-
-    /* Cartes de résultats stylisées avec bordures colorées */
-    .result-card { border: 1px solid rgba(128, 128, 128, 0.2); border-left: 5px solid #2E7D32; padding: 15px; border-radius: 8px; }
-    .result-title { font-size: 1.3rem; color: #2E7D32; font-weight: 700; }
-
-    /* Traduction personnalisée du bouton d'upload en français */
-    [data-testid="stFileUploaderDropzone"] [data-testid="stBaseButton-secondary"]::before { content: "Parcourir..."; visibility: visible; }
-    [data-testid="stFileUploaderDropzone"] [data-testid="stBaseButton-secondary"] { font-size: 0px !important; }
+    .main-title { color: #2E7D32; font-size: 1.8rem; font-weight: 700; margin-bottom: 5px; }
+    
+    /* Badges de statut adaptatifs (Mode Clair / Mode Sombre) */
+    .status-ok  { background: rgba(46,125,50,.15); color: #2E7D32; padding: 4px 12px; border-radius: 20px; font-weight: 600; }
+    .status-err { background: rgba(198,40,40,.15);  color: #C62828; padding: 4px 12px; border-radius: 20px; font-weight: 600; }
+    
+    /* Carte de résultat avec bordure latérale verte */
+    .result-card { border: 1px solid rgba(128,128,128,.2); border-left: 5px solid #2E7D32;
+                   padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+    .result-title { font-size: 1.2rem; color: #2E7D32; font-weight: 700; }
     </style>
 """, unsafe_allow_html=True)
 
 # ============================================================
-# 2. CHARGEMENT DU MODÈLE (Détection Automatique & Mise en Cache)
+# 2. PIPELINE DE TRANSFORMATION PRÉ-CONSTRUIT
+# ============================================================
+
+# Définition unique et globale du pipeline de prétraitement pour l'inférence
+_INFERENCE_TF = transforms.Compose([
+    transforms.Resize(IMAGE_SIZE, interpolation=transforms.InterpolationMode.LANCZOS),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=MEAN_IMAGENET, std=STD_IMAGENET),
+])
+
+
+def _center_crop(img: Image.Image) -> Image.Image:
+    """Effectue un rognage carré centré sur l'image pour supprimer le bruit d'arrière-plan."""
+    w, h = img.size
+    c = min(w, h)
+    return img.crop(((w - c) // 2, (h - c) // 2, (w + c) // 2, (h + c) // 2))
+
+# ============================================================
+# 3. CHARGEMENT & MISE EN CACHE DU MODÈLE PYTORCH
 # ============================================================
 
 @st.cache_resource
-def charger_modele_ui() -> Tuple[torch.nn.Module, torch.device, str]:
-    """Charge et met en cache le meilleur modèle PyTorch disponible.
-
-    Returns:
-        Tuple[torch.nn.Module, torch.device, str]: Modèle chargé, calculateur (CPU/GPU) et nom de l'architecture.
-    """
-    # 1. Sélection automatique de l'accélérateur matériel (GPU CUDA si disponible, sinon CPU)
+def charger_modele_ui():
+    """Charge et met en cache le meilleur modèle PyTorch disponible dans models/."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # 2. Détection agnostique de l'architecture et chargement des poids du fichier .pth
-    if DEFAULT_MODEL_PATH.exists():
-        modele, arch = charger_meilleur_modele(DEFAULT_MODEL_PATH, device=device)
-    else:
-        modele = cree_modele_pretrain().to(device)
-        arch = "ResNet18"
-    
+    modele, arch = charger_meilleur_modele(device=device.type)
     return modele, device, arch
 
 # ============================================================
-# 3. EN-TÊTE & BADGES DE STATUT
+# 4. EN-TÊTE & BADGES D'INFORMATION (Modèle & Calcul)
 # ============================================================
 
 st.markdown('<h1 class="main-title">Diagnostic des maladies du riz</h1>', unsafe_allow_html=True)
 
-# Tentative de chargement du modèle et affichage des 2 badges distincts (Modèle et Calcul)
 try:
     modele, device, arch = charger_modele_ui()
     model_pret = True
     device_txt = "GPU" if device.type == "cuda" else "CPU"
-    st.markdown(f'''
-        <span class="status-ok">Modèle : {arch.upper()}</span>
-        <span class="status-ok" style="margin-left: 8px;">Calcul : {device_txt}</span>
-    ''', unsafe_allow_html=True)
+    # Affichage des 2 badges de statut séparés conformément aux consignes
+    st.markdown(
+        f'<span class="status-ok">Modèle : {arch.upper()}</span>'
+        f'<span class="status-ok" style="margin-left:8px;">Calcul : {device_txt}</span>',
+        unsafe_allow_html=True,
+    )
 except Exception as e:
     model_pret = False
     st.markdown(f'<span class="status-err">Erreur modèle : {e}</span>', unsafe_allow_html=True)
 
 st.write("")
-st.write("Choisissez une photo de feuille de riz à analyser.")
 
 # ============================================================
-# 4. SÉLECTION ET ANALYSE D'IMAGE
+# 5. DISPOSITION EN 2 COLONNES (Input en Col 1, Résultats en Col 2)
 # ============================================================
 
-# Composant de téléversement d'image en français
-uploaded_file = st.file_uploader("Fichier", type=["jpg", "jpeg", "png", "bmp"], label_visibility="collapsed")
+col1, col2 = st.columns(2, gap="large")
 
-if uploaded_file and model_pret:
-    # Lecture et conversion de l'image téléversée en mode RGB
-    image = Image.open(uploaded_file).convert("RGB")
-    
-    # Disposition sur 2 colonnes égales
-    col1, col2 = st.columns(2, gap="medium")
+# --- COLONNE 1 : Téléversement et Prévisualisation compacte ---
+with col1:
+    st.subheader("Image de la feuille")
+    uploaded_file = st.file_uploader(
+        "Importer une photo de feuille", type=["jpg", "jpeg", "png", "bmp"],
+        label_visibility="collapsed",
+    )
+    if uploaded_file:
+        image = Image.open(uploaded_file).convert("RGB")
+        # Prévisualisation compacte (width=300) pour éviter tout défilement vertical (scroll)
+        st.image(image, caption="Photo importée", width=300)
 
-    # Colonne 1 : Affichage de l'image d'origine de l'utilisateur
-    with col1:
-        st.image(image, caption="Photo importée", use_container_width=True)
+# --- COLONNE 2 : Résultats du Diagnostic, Probabilités et Tableaux ---
+with col2:
+    st.subheader("Résultat du diagnostic")
 
-    # Colonne 2 : Pipeline d'analyse et résultats
-    with col2:
-        # Étape A : Filtrage Hors-Domaine (OOD) via vérification de couleur végétale HSV
+    if not uploaded_file:
+        st.info("Veuillez sélectionner une photo dans la colonne de gauche.")
+    elif model_pret:
+        # Étape A : Filtrage Hors-Domaine (OOD) via analyse de couverture végétale HSV
         est_feuille, ratio = verifier_est_feuille_riz(image)
 
         if not est_feuille:
-            # Rejet immédiat si aucune feuille de riz n'est détectée (ex: capture d'écran, tableau)
-            st.error("Image rejetée : Aucune feuille de riz végétale détectée sur la photo.")
+            st.error("Image rejetée : aucune feuille de riz détectée sur la photo.")
             st.markdown(f"""
-                <div class="result-card" style="border-left-color: #C62828;">
-                    <div class="result-title" style="color: #C62828;">Diagnostic : Image non valide / Hors domaine</div>
-                    <div>Couverture végétale détectée : <b>{ratio * 100:.1f}%</b> (Seuil minimum : 10%)</div>
-                    <div style="margin-top:8px; font-size:0.9rem; color:#6B7280;">Veuillez importer une vraie photo de feuille de riz (pas de tableau, texte ou objet neutre).</div>
+                <div class="result-card" style="border-left-color:#C62828;">
+                    <div class="result-title" style="color:#C62828;">Diagnostic : image hors domaine</div>
+                    <div>Couverture végétale détectée : <b>{ratio*100:.1f}%</b> (Seuil minimum : 10%)</div>
                 </div>
             """, unsafe_allow_html=True)
         else:
-            # Étape B : Prétraitement de la photo et inférence PyTorch
+            # Étape B : Prétraitement et inférence rapide
             with st.spinner("Analyse en cours..."):
-                # Prétraitement standard de l'image vers tenseur shape : (C=3, H=224, W=224)
-                tf = transforms.Compose([
-                    transforms.Resize(IMAGE_SIZE),
-                    transforms.ToTensor(),
-                    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-                ])
-                
-                # Conversion en batch unique : shape (Batch_size=1, C=3, H=224, W=224)
-                tensor = tf(image).unsqueeze(0).to(device)
-                
-                # Inférence PyTorch sans calcul de gradient
+                # Application de Center Crop -> Resize (224,224) -> ToTensor -> Normalize
+                tensor = _INFERENCE_TF(_center_crop(image)).unsqueeze(0).to(device)
                 with torch.no_grad():
-                    probs = torch.softmax(modele(tensor)[0], dim=0)  # Vector de probabilités shape : (6,)
+                    probs = torch.softmax(modele(tensor)[0], dim=0)
 
-                # Extraction de la probabilité maximale et de l'indice de classe
-                top_prob, top_idx = torch.max(probs, 0)
-                classe = CLASSES[top_idx.item()]
-                confiance = float(top_prob.item() * 100.0)
+            # Étape C : Identification de la classe prédite et du score de confiance
+            top_prob, top_idx = torch.max(probs, 0)
+            classe = CLASSES[top_idx.item()]
+            confiance = top_prob.item() * 100.0
 
-            # Étape C : Vérification du seuil de confiance minimal (70%)
+            # Étape D : Contrôle du seuil de confiance minimal (70%)
             if confiance < SEUIL_CONFIANCE_MIN:
-                st.warning("Attention : Confiance insuffisante pour établir un diagnostic certain.")
+                st.warning("Confiance insuffisante pour établir un diagnostic certain.")
                 st.markdown(f"""
-                    <div class="result-card" style="border-left-color: #F57C00;">
-                        <div class="result-title" style="color: #F57C00;">Diagnostic : Incertain</div>
-                        <div>Meilleure hypothèse : <b>{classe}</b> ({confiance:.2f}%)</div>
+                    <div class="result-card" style="border-left-color:#F57C00;">
+                        <div class="result-title" style="color:#F57C00;">Diagnostic : incertain</div>
+                        <div>Hypothèse principale : <b>{classe}</b> ({confiance:.2f}%)</div>
                     </div>
                 """, unsafe_allow_html=True)
             else:
-                # Diagnostic valide et confirmé
                 st.markdown(f"""
                     <div class="result-card">
                         <div class="result-title">Diagnostic : {classe}</div>
@@ -163,19 +160,17 @@ if uploaded_file and model_pret:
                     </div>
                 """, unsafe_allow_html=True)
 
-            st.write("")
-            st.write("<b>Distribution des probabilités :</b>", unsafe_allow_html=True)
-
-            # Étape D : Construction du graphique de probabilités interactif
+            # Étape E : Graphique de distribution des probabilités
             df_probs = pd.DataFrame({
-                "Maladie": CLASSES, 
-                "Probabilité (%)": [round(float(p.item() * 100.0), 2) for p in probs]
+                "Maladie": CLASSES,
+                "Probabilité (%)": [round(p.item() * 100, 2) for p in probs],
             })
+            st.write("<b>Distribution des probabilités :</b>", unsafe_allow_html=True)
             st.bar_chart(df_probs.set_index("Maladie"), color="#2E7D32")
 
-            # Étape E : Tableau récapitulatif détaillé sous panneau déroulant
+            # Étape F : Tableau explicatif des détails de la prédiction
             with st.expander("Voir le détail des probabilités"):
                 st.dataframe(
-                    df_probs.sort_values(by="Probabilité (%)", ascending=False).reset_index(drop=True), 
-                    use_container_width=True
+                    df_probs.sort_values("Probabilité (%)", ascending=False).reset_index(drop=True),
+                    use_container_width=True,
                 )

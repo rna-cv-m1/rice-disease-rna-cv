@@ -13,6 +13,10 @@ TEST_DIR = DATA_DIR / "test"
 MODELS_DIR = BASE_DIR / "models"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
+# Architectures supportées et par défaut
+ARCHITECTURES_DISPONIBLES = ["efficientnet_b0", "resnet18", "mobilenet_v3_small", "convnext_tiny"]
+DEFAULT_ARCHITECTURE = "efficientnet_b0"
+
 # Hyperparamètres et configurations de traitement
 BATCH_SIZE = 32
 IMAGE_SIZE = (224, 224)
@@ -25,6 +29,13 @@ LABEL_SMOOTHING = 0.1
 QUALITE_JPEG = 85
 EXTENSIONS_VALIDE = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
 
+# Normalisation standard ImageNet (Moyenne & Écart-type RGB)
+MEAN_IMAGENET = [0.485, 0.456, 0.406]
+STD_IMAGENET = [0.229, 0.224, 0.225]
+
+# Dataset Kaggle de référence
+KAGGLE_DATASET_HANDLE = "anshulm257/rice-disease-dataset"
+
 # Noms et nombre de classes
 CLASSES = [
     'Bacterial Leaf Blight',
@@ -36,8 +47,5 @@ CLASSES = [
 ]
 NB_CLASSES = len(CLASSES)
 
-# Modèle par défaut et extension de fichier
-MODEL_NAME = "meilleur_modele"
+# Extension de fichier de modèle
 EXTENSION_MODEL = ".pth"
-DEFAULT_MODEL_NAME = f"{MODEL_NAME}{EXTENSION_MODEL}"
-DEFAULT_MODEL_PATH = MODELS_DIR / DEFAULT_MODEL_NAME

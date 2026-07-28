@@ -5,16 +5,16 @@ import torchvision.transforms as transforms
 from PIL import Image
 from typing import Union
 
-from src.config import DEFAULT_MODEL_PATH, CLASSES, IMAGE_SIZE, SEUIL_CONFIANCE_MIN
+from src.config import CLASSES, IMAGE_SIZE, SEUIL_CONFIANCE_MIN, MEAN_IMAGENET, STD_IMAGENET
 from src.dataset.verifier import verifier_est_feuille_riz
 from src.nn.builder import charger_meilleur_modele
 
-def predire_image(image_path: Union[str, Path], model_path: Union[str, Path] = DEFAULT_MODEL_PATH) -> None:
+def predire_image(image_path: Union[str, Path], model_path: Union[str, Path, None] = None) -> None:
     """Effectue l'inférence et le diagnostic complet sur une image en ligne de commande.
 
     Args:
         image_path (Union[str, Path]): Chemin d'accès à l'image de feuille à analyser.
-        model_path (Union[str, Path]): Chemin vers les poids .pth du modèle.
+        model_path (Union[str, Path, None]): Chemin optionnel vers un fichier .pth spécifique.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     image = Image.open(image_path).convert("RGB")
@@ -33,16 +33,22 @@ def predire_image(image_path: Union[str, Path], model_path: Union[str, Path] = D
         print("=" * 60)
         return
 
-    # 2. Chargement du modèle agnostique et prétraitement
-    modele, arch = charger_meilleur_modele(model_path, device=device)
+    # 2. Chargement agnostique du meilleur modèle .pth disponible
+    modele, arch = charger_meilleur_modele(model_path, device=device.type)
+    
+    # Center Crop au carré avant Resize 224x224 identique à transform.py
+    w, h = image.size
+    cote = min(w, h)
+    image_cropped = image.crop(((w - cote) // 2, (h - cote) // 2, (w + cote) // 2, (h + cote) // 2))
+
     transform = transforms.Compose([
-        transforms.Resize(IMAGE_SIZE),
+        transforms.Resize(IMAGE_SIZE, interpolation=transforms.InterpolationMode.LANCZOS),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=MEAN_IMAGENET, std=STD_IMAGENET)
     ])
 
     # Shape entrée tensor : (Batch_size=1, Channels=3, Height=224, Width=224)
-    tensor = transform(image).unsqueeze(0).to(device)
+    tensor = transform(image_cropped).unsqueeze(0).to(device)
 
     with torch.no_grad():
         outputs = modele(tensor)  # Logits de shape : (1, NB_CLASSES=6)
@@ -66,10 +72,11 @@ def main() -> None:
     """Point d'entrée du script CLI d'inférence."""
     parser = argparse.ArgumentParser(description="Diagnostic CLI de la maladie du riz")
     parser.add_argument("--image", type=str, required=True, help="Chemin vers l'image de la feuille de riz")
-    parser.add_argument("--model", type=str, default=str(DEFAULT_MODEL_PATH), help="Chemin du modèle .pth")
+    parser.add_argument("--model", type=str, default=None, help="Chemin optionnel du modèle .pth (ex: models/convnext_tiny.pth)")
     args = parser.parse_args()
 
-    predire_image(args.image, Path(args.model))
+    model_path = Path(args.model) if args.model else None
+    predire_image(args.image, model_path)
 
 
 if __name__ == "__main__":

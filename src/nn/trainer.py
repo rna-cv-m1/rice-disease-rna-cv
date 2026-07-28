@@ -1,105 +1,154 @@
 import logging
 import torch
 import torch.nn as nn
-from torch.optim import Adam
+from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.cuda.amp import GradScaler, autocast
 from typing import Dict, Any, Union
 from pathlib import Path
 
-from src.config import MODELS_DIR, NB_EPOCHS, LEARNING_RATE, DEFAULT_MODEL_PATH, CLASSES
+from src.config import MODELS_DIR, NB_EPOCHS, LEARNING_RATE, DEFAULT_ARCHITECTURE, LABEL_SMOOTHING
 from src.dataset.loader import creer_dataloaders
-from src.nn.builder import cree_modele_pretrain
+from src.nn.builder import cree_modele_pretrain, ARCHITECTURES_DISPONIBLES
 
+# Configuration du logger pour le suivi des métriques d'apprentissage
 logger = logging.getLogger(__name__)
 
+
 def entrainer(
-    epochs: int = NB_EPOCHS, 
-    lr: float = LEARNING_RATE, 
-    save_path: Union[str, Path] = DEFAULT_MODEL_PATH
+    epochs: int = NB_EPOCHS,
+    lr: float = LEARNING_RATE,
+    architecture: str = DEFAULT_ARCHITECTURE,
+    save_path: Union[str, Path] = None,
 ) -> Dict[str, Any]:
-    """Exécute la boucle d'entraînement PyTorch et enregistre le meilleur modèle (.pth).
+    """Exécute la boucle d'entraînement PyTorch avec AMP (précision mixte), AdamW et Cosine Annealing.
 
     Args:
-        epochs (int): Nombre total d'époques d'entraînement.
-        lr (float): Taux d'apprentissage initial (Learning Rate).
-        save_path (Union[str, Path]): Chemin de sauvegarde du fichier .pth final.
+        epochs (int): Nombre d'époques.
+        lr (float): Taux d'apprentissage initial.
+        architecture (str): Nom du modèle PyTorch à entraîner.
+        save_path (Union[str, Path]): Chemin de destination du fichier .pth.
 
     Returns:
-        Dict[str, Any]: Historique des pertes et précision finale.
+        Dict[str, Any]: Historique complet (train_loss, val_loss, val_acc, meilleure perte).
     """
-    # 1. Sélection automatique du matériel de calcul (GPU CUDA si disponible, sinon CPU)
+    # Sélection automatique du processeur de calcul (GPU CUDA si disponible, sinon CPU)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Début de l'entraînement sur le device : {device}")
+    # Activation de la précision mixte (AMP FP16) sur GPU pour accélérer les calculs par 2
+    use_amp = device.type == "cuda"
+    logger.info(f"Début de l'entraînement {architecture.upper()} sur {device} (AMP={use_amp})")
 
-    # 2. Initialisation des DataLoaders (Shape par lot : B, C=3, H=224, W=224)
+    # Définition du chemin de sauvegarde du modèle sous models/<architecture>.pth
+    save_path = Path(save_path) if save_path else MODELS_DIR / f"{architecture}.pth"
+
+    # Chargement des DataLoaders optimisés
     loader_train, loader_val, _, nb_classes = creer_dataloaders()
-    
-    # 3. Instanciation du modèle et transfert sur le processeur graphique/CPU
-    modele = cree_modele_pretrain(nb_classes=nb_classes).to(device)
+    # Instanciation et transfert du modèle sur le calculateur cible
+    modele = cree_modele_pretrain(nb_classes=nb_classes, architecture=architecture).to(device)
 
-    # 4. Fonction de perte (CrossEntropyLoss avec Label Smoothing pour éviter la surconfiance)
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-    
-    # 5. Optimiseur Adam uniquement sur les paramètres dégelés (requires_grad=True)
-    optimizer = Adam(filter(lambda p: p.requires_grad, modele.parameters()), lr=lr)
-    
-    # 6. Planificateur de taux d'apprentissage Cosine Annealing pour une décroissance fluide
+    # Fonction de perte CrossEntropy avec lissage d'étiquettes (Label Smoothing = 0.1)
+    criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
+    # Optimiseur AdamW (dÉcroissance des poids L2 régulière pour éviter le surapprentissage)
+    optimizer = AdamW(filter(lambda p: p.requires_grad, modele.parameters()), lr=lr, weight_decay=1e-4)
+    # Planificateur de taux d'apprentissage avec décroissance cosinoïdale
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs)
-    
-    meilleure_perte = float('inf')
+    # Mise à l'échelle des gradients pour l'entraînement FP16
+    scaler = GradScaler(enabled=use_amp)
 
-    # 7. Boucle principale à travers les époques
+    meilleure_perte = float("inf")
+    # Dictionnaire d'enregistrement de l'historique
+    history = {
+        "architecture": architecture,
+        "train_loss": [],
+        "val_loss": [],
+        "val_acc": [],
+        "perte_val_min": 0.0,
+        "precision_finale": 0.0,
+        "model_path": save_path
+    }
+
+    # Boucle d'entraînement époque par époque
     for epoch in range(epochs):
-        # ------------------- PHASE D'ENTRAÎNEMENT -------------------
+        # ---------------------------------------------------------------------------
+        # PHASE 1 : ENTRAÎNEMENT (Train Mode)
+        # ---------------------------------------------------------------------------
         modele.train()
-        perte_train = 0.0
-        
-        for images, targets in loader_train:
-            # images shape: (B, 3, 224, 224), targets shape: (B,)
-            images, targets = images.to(device), targets.to(device)
+        perte_train = total_train = 0
 
-            optimizer.zero_grad()                 # Remise à zéro des gradients accumulés
-            outputs = modele(images)              # Forward pass : outputs shape (B, 6)
-            loss = criterion(outputs, targets)    # Calcul de la perte scalaire
-            loss.backward()                       # Backward pass : calcul des gradients
-            optimizer.step()                      # Mise à jour des poids du réseau
+        for images, targets in loader_train:
+            # Transfert asynchrone non-bloquant des images et cibles vers le GPU
+            images, targets = images.to(device, non_blocking=True), targets.to(device, non_blocking=True)
+            # Réinitialisation rapide des gradients (set_to_none=True libère la mémoire)
+            optimizer.zero_grad(set_to_none=True)
+
+            # Context manager pour le calcul sous précision mixte (FP16/FP32)
+            with autocast(enabled=use_amp):
+                loss = criterion(modele(images), targets)
+
+            # Rétropropagation des gradients mis à l'échelle
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
             perte_train += loss.item() * images.size(0)
+            total_train += targets.size(0)
 
-        scheduler.step()  # Mise à jour du learning rate pour l'époque suivante
+        # Mise à jour du taux d'apprentissage (Cosine Annealing) à chaque fin d'époque
+        scheduler.step()
 
-        # ------------------- PHASE DE VALIDATION -------------------
+        # ---------------------------------------------------------------------------
+        # PHASE 2 : VALIDATION (Eval Mode)
+        # ---------------------------------------------------------------------------
         modele.eval()
-        perte_val = 0.0
-        corrects = 0
-        total = 0
+        perte_val = corrects = total_val = 0
 
-        with torch.no_grad():  # Désactivation du calcul des gradients pour accélérer la validation
+        # Inférence déterministe sans calcul de gradient
+        with torch.no_grad():
             for images, targets in loader_val:
-                images, targets = images.to(device), targets.to(device)
-                outputs = modele(images)          # outputs shape : (B, 6)
-                loss = criterion(outputs, targets)
-                perte_val += loss.item() * images.size(0)
+                images, targets = images.to(device, non_blocking=True), targets.to(device, non_blocking=True)
+                with autocast(enabled=use_amp):
+                    outputs = modele(images)
+                perte_val += criterion(outputs, targets).item() * images.size(0)
+                # Calcul rapide des prédictions exactes via argmax
+                corrects += (outputs.argmax(1) == targets).sum().item()
+                total_val += targets.size(0)
 
-                # Obtenir la classe ayant la plus forte probabilité
-                _, preds = torch.max(outputs, 1)   # preds shape : (B,)
-                corrects += torch.sum(preds == targets.data).item()
-                total += targets.size(0)
+        # Calcul des moyennes d'époque
+        train_loss = perte_train / total_train
+        val_loss = perte_val / total_val
+        val_acc = corrects / total_val * 100.0
 
-        # 8. Calcul des métriques moyennes de l'époque
-        perte_val_moy = perte_val / total
-        precision_val = (corrects / total) * 100.0
+        # Stockage dans l'historique
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["val_acc"].append(val_acc)
 
-        logger.info(f"Époque {epoch+1}/{epochs} - Perte Val: {perte_val_moy:.4f} - Précision Val: {precision_val:.2f}%")
+        logger.info(f"Époque {epoch+1}/{epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
 
-        # 9. Sauvegarde du checkpoint si la perte de validation s'améliore (Best Model checkpoint)
-        if perte_val_moy < meilleure_perte:
-            meilleure_perte = perte_val_moy
-            torch.save(modele.state_dict(), save_path)
-            logger.info(f"--> Meilleur modèle sauvegardé dans : {save_path}")
+        # Sauvegarde du meilleur modèle lorsque la perte de validation diminue
+        if val_loss < meilleure_perte:
+            meilleure_perte = val_loss
+            history["perte_val_min"] = meilleure_perte
+            history["precision_finale"] = val_acc
+            
+            checkpoint = {
+                "arch": architecture,
+                "val_loss": val_loss,
+                "val_acc": val_acc,
+                "history": history,
+                "state_dict": modele.state_dict()
+            }
+            torch.save(checkpoint, save_path)
+            logger.info(f"--> Meilleur modèle sauvegardé sous : {save_path}")
 
-    return {"perte_val_min": meilleure_perte, "precision_finale": precision_val}
+    return history
+
 
 if __name__ == "__main__":
+    import argparse
     logging.basicConfig(level=logging.INFO)
-    entrainer()
+    parser = argparse.ArgumentParser(description="Entraînement de modèle PyTorch")
+    parser.add_argument("--arch", default=DEFAULT_ARCHITECTURE, choices=ARCHITECTURES_DISPONIBLES)
+    parser.add_argument("--epochs", type=int, default=NB_EPOCHS)
+    args = parser.parse_args()
+    entrainer(epochs=args.epochs, architecture=args.arch)
