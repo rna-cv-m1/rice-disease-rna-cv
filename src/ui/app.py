@@ -156,22 +156,13 @@ with col2:
             classe = CLASSES[top_idx.item()]
             confiance = top_prob.item() * 100.0
 
-            # Étape D : Contrôle du seuil de confiance minimal (70%)
-            if confiance < SEUIL_CONFIANCE_MIN:
-                st.warning("Confiance insuffisante pour établir un diagnostic certain.")
-                st.markdown(f"""
-                    <div class="result-card" style="border-left-color:#F57C00;">
-                        <div class="result-title" style="color:#F57C00;">Diagnostic : incertain</div>
-                        <div>Hypothèse principale : <b>{classe}</b> ({confiance:.2f}%)</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                    <div class="result-card">
-                        <div class="result-title">Diagnostic : {classe}</div>
-                        <div>Confiance : <b>{confiance:.2f}%</b></div>
-                    </div>
-                """, unsafe_allow_html=True)
+            # Étape D : Affichage direct et épuré de la maladie avec la plus haute probabilité
+            st.markdown(f"""
+                <div class="result-card">
+                    <div class="result-title">{classe}</div>
+                    <div>Probabilité : <b>{confiance:.2f}%</b></div>
+                </div>
+            """, unsafe_allow_html=True)
 
             # Étape E : Graphique de distribution des probabilités
             df_probs = pd.DataFrame({
