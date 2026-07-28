@@ -1,14 +1,33 @@
+# Python temporaires et caches (y compris tous sous-dossiers pycache)
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Fichiers de packaging / build
+*.egg-info/
+*.egg
+build/
+dist/
+
 # Environnements virtuels
 .venv/
 venv/
 env/
 
+# Données volumineuses et poids de modèles lourds (.pth)
+data/raw/*
+data/processed/*
+!data/processed/.gitkeep
+models/*.pth
+!models/.gitkeep
 
-# Stockage de données volumineuses (images)
-data/donner_brute
-
-# Configuration locale et système
+# Configuration locale, IDE et système
 .DS_Store
 .env
 .idea/
 .vscode/
+.pytest_cache/
+
+# Fichiers de mémoire d'agents IA locaux
+AGENTS.md
+.agents/
